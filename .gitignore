@@ -1,5 +1,5 @@
 bin/
 temp/
-stl/
+#stl/
 .vs/
 FluidX3D.vcxproj.user
