@@ -56,28 +56,29 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 	lbm.graphics.visualization_modes = VIS_STREAMLINES;
 	lbm.run();
 	//lbm.run(1000u); lbm.u.read_from_device(); println(lbm.u.x[lbm.index(Nx/2u, Ny/2u, Nz/2u)]); wait(); // test for binary identity
-} /**/
+	}
+*/
 
 
 
-/*void main_setup() { // 2D Taylor-Green vortices (use D2Q9); required extensions in defines.hpp: INTERACTIVE_GRAPHICS
-	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
-	LBM lbm(1024u, 1024u, 1u, 0.02f);
-	// ###################################################################################### define geometry ######################################################################################
-	const uint Nx=lbm.get_Nx(), Ny=lbm.get_Ny(), Nz=lbm.get_Nz(); parallel_for(lbm.get_N(), [&](ulong n) { uint x=0u, y=0u, z=0u; lbm.coordinates(n, x, y, z);
-		const float A = 0.2f;
-		const uint periodicity = 5u;
-		const float a=(float)Nx/(float)periodicity, b=(float)Ny/(float)periodicity;
-		const float fx = (float)x+0.5f-0.5f*(float)Nx;
-		const float fy = (float)y+0.5f-0.5f*(float)Ny;
-		lbm.u.x[n] =  A*cosf(2.0f*pif*fx/a)*sinf(2.0f*pif*fy/b);
-		lbm.u.y[n] = -A*sinf(2.0f*pif*fx/a)*cosf(2.0f*pif*fy/b);
-		lbm.rho[n] = 1.0f-sq(A)*3.0f/4.0f*(cosf(4.0f*pif*fx/a)+cosf(4.0f*pif*fy/b));
-	}); // ####################################################################### run simulation, export images and data ##########################################################################
-	lbm.graphics.visualization_modes = VIS_FIELD;
-	lbm.graphics.slice_mode = 3;
-	lbm.run();
-} /**/
+// void main_setup() { // 2D Taylor-Green vortices (use D2Q9); required extensions in defines.hpp: INTERACTIVE_GRAPHICS
+// 	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
+// 	LBM lbm(1024u, 1024u, 1u, 0.02f);
+// 	// ###################################################################################### define geometry ######################################################################################
+// 	const uint Nx=lbm.get_Nx(), Ny=lbm.get_Ny(), Nz=lbm.get_Nz(); parallel_for(lbm.get_N(), [&](ulong n) { uint x=0u, y=0u, z=0u; lbm.coordinates(n, x, y, z);
+// 		const float A = 0.2f;
+// 		const uint periodicity = 5u;
+// 		const float a=(float)Nx/(float)periodicity, b=(float)Ny/(float)periodicity;
+// 		const float fx = (float)x+0.5f-0.5f*(float)Nx;
+// 		const float fy = (float)y+0.5f-0.5f*(float)Ny;
+// 		lbm.u.x[n] =  A*cosf(2.0f*pif*fx/a)*sinf(2.0f*pif*fy/b);
+// 		lbm.u.y[n] = -A*sinf(2.0f*pif*fx/a)*cosf(2.0f*pif*fy/b);
+// 		lbm.rho[n] = 1.0f-sq(A)*3.0f/4.0f*(cosf(4.0f*pif*fx/a)+cosf(4.0f*pif*fy/b));
+// 	}); // ####################################################################### run simulation, export images and data ##########################################################################
+// 	lbm.graphics.visualization_modes = VIS_FIELD;
+// 	lbm.graphics.slice_mode = 3;
+// 	lbm.run();
+// } /**/
 
 
 
@@ -145,48 +146,48 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 
 
 
-/*void main_setup() { // Stokes drag validation; required extensions in defines.hpp: FORCE_FIELD, EQUILIBRIUM_BOUNDARIES
-	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
-	const ulong dt = 100ull; // check error every dt time steps
-	const float R = 32.0f; // sphere radius
-	const float Re = 0.01f; // Reynolds number
-	const float nu = 1.0f; // kinematic shear viscosity
-	const float rho = 1.0f; // density
-	const uint L = to_uint(8.0f*R); // simulation box size
-	const float u = units.u_from_Re(Re, 2.0f*R, nu); // velocity
-	LBM lbm(L, L, L, nu); // flow driven by equilibrium boundaries
-	// ###################################################################################### define geometry ######################################################################################
-	const uint Nx=lbm.get_Nx(), Ny=lbm.get_Ny(), Nz=lbm.get_Nz(); parallel_for(lbm.get_N(), [&](ulong n) { uint x=0u, y=0u, z=0u; lbm.coordinates(n, x, y, z);
-		if(x==0u||x==Nx-1u||y==0u||y==Ny-1u||z==0u||z==Nz-1u) lbm.flags[n] = TYPE_E;
-		if(sphere(x, y, z, lbm.center(), R)) {
-			lbm.flags[n] = TYPE_S|TYPE_X; // flag boundary cells for force summation additionally with TYPE_X
-		} else {
-			lbm.rho[n] = units.rho_Stokes(lbm.position(x, y, z), float3(-u, 0.0f, 0.0f), R, rho, nu);
-			const float3 un = units.u_Stokes(lbm.position(x, y, z), float3(-u, 0.0f, 0.0f), R);
-			lbm.u.x[n] = un.x;
-			lbm.u.y[n] = un.y;
-			lbm.u.z[n] = un.z;
-		}
-	}); // ####################################################################### run simulation, export images and data ##########################################################################
-	double E1=1000.0, E2=1000.0;
-	while(true) { // main simulation loop
-		lbm.run(dt);
-		lbm.calculate_force_on_boundaries();
-		lbm.F.read_from_device();
-		const float3 force = lbm.calculate_force_on_object(TYPE_S|TYPE_X);
-		const double F_theo = units.F_Stokes(rho, u, nu, R);
-		const double F_sim = (double)length(force);
-		const double E0 = fabs(F_sim-F_theo)/F_theo;
-		print_info(to_string(lbm.get_t())+", expected: "+to_string(F_theo, 6u)+", measured: "+to_string(F_sim, 6u)+", error = "+to_string((float)(100.0*E0), 1u)+"%");
-		if(converged(E2, E1, E0, 1E-4)) { // stop when error has sufficiently converged
-			print_info("Error converged after "+to_string(lbm.get_t())+" steps to "+to_string(100.0*E0, 1u)+"%");
-			wait();
-			break;
-		}
-		E2 = E1;
-		E1 = E0;
-	}
-} /**/
+// void main_setup() { // Stokes drag validation; required extensions in defines.hpp: FORCE_FIELD, EQUILIBRIUM_BOUNDARIES
+// 	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
+// 	const ulong dt = 100ull; // check error every dt time steps
+// 	const float R = 32.0f; // sphere radius
+// 	const float Re = 0.01f; // Reynolds number
+// 	const float nu = 1.0f; // kinematic shear viscosity
+// 	const float rho = 1.0f; // density
+// 	const uint L = to_uint(8.0f*R); // simulation box size
+// 	const float u = units.u_from_Re(Re, 2.0f*R, nu); // velocity
+// 	LBM lbm(L, L, L, nu); // flow driven by equilibrium boundaries
+// 	// ###################################################################################### define geometry ######################################################################################
+// 	const uint Nx=lbm.get_Nx(), Ny=lbm.get_Ny(), Nz=lbm.get_Nz(); parallel_for(lbm.get_N(), [&](ulong n) { uint x=0u, y=0u, z=0u; lbm.coordinates(n, x, y, z);
+// 		if(x==0u||x==Nx-1u||y==0u||y==Ny-1u||z==0u||z==Nz-1u) lbm.flags[n] = TYPE_E;
+// 		if(sphere(x, y, z, lbm.center(), R)) {
+// 			lbm.flags[n] = TYPE_S|TYPE_X; // flag boundary cells for force summation additionally with TYPE_X
+// 		} else {
+// 			lbm.rho[n] = units.rho_Stokes(lbm.position(x, y, z), float3(-u, 0.0f, 0.0f), R, rho, nu);
+// 			const float3 un = units.u_Stokes(lbm.position(x, y, z), float3(-u, 0.0f, 0.0f), R);
+// 			lbm.u.x[n] = un.x;
+// 			lbm.u.y[n] = un.y;
+// 			lbm.u.z[n] = un.z;
+// 		}
+// 	}); // ####################################################################### run simulation, export images and data ##########################################################################
+// 	double E1=1000.0, E2=1000.0;
+// 	while(true) { // main simulation loop
+// 		lbm.run(dt);
+// 		lbm.calculate_force_on_boundaries();
+// 		lbm.F.read_from_device();
+// 		const float3 force = lbm.calculate_force_on_object(TYPE_S|TYPE_X);
+// 		const double F_theo = units.F_Stokes(rho, u, nu, R);
+// 		const double F_sim = (double)length(force);
+// 		const double E0 = fabs(F_sim-F_theo)/F_theo;
+// 		print_info(to_string(lbm.get_t())+", expected: "+to_string(F_theo, 6u)+", measured: "+to_string(F_sim, 6u)+", error = "+to_string((float)(100.0*E0), 1u)+"%");
+// 		if(converged(E2, E1, E0, 1E-4)) { // stop when error has sufficiently converged
+// 			print_info("Error converged after "+to_string(lbm.get_t())+" steps to "+to_string(100.0*E0, 1u)+"%");
+// 			wait();
+// 			break;
+// 		}
+// 		E2 = E1;
+// 		E1 = E0;
+// 	}
+// }
 
 
 
@@ -400,7 +401,7 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 		lbm.run(1u, lbm_T); // run dt time steps
 	}
 	lbm.write_status();
-} /**/
+	}*/
 
 
 
@@ -474,7 +475,7 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 
 
 
-/*void main_setup() { // Star Wars TIE fighter; required extensions in defines.hpp: FP16S, EQUILIBRIUM_BOUNDARIES, SUBGRID, INTERACTIVE_GRAPHICS or GRAPHICS
+void main_setup() { // Star Wars TIE fighter; required extensions in defines.hpp: FP16S, EQUILIBRIUM_BOUNDARIES, SUBGRID, INTERACTIVE_GRAPHICS or GRAPHICS
 	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
 	const uint3 lbm_N = resolution(float3(1.0f, 2.0f, 1.0f), 1760u); // input: simulation box aspect ratio and VRAM occupation in MB, output: grid resolution
 	const float lbm_Re = 100000.0f;
@@ -514,7 +515,7 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 		mesh->rotate(rotation); // rotate mesh
 		lbm.voxelize_mesh_on_device(mesh);
 	}
-} /**/
+}
 
 
 
@@ -547,7 +548,7 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 		}
 #endif // GRAPHICS && !INTERACTIVE_GRAPHICS
 	}
-} /**/
+} /
 
 
 
