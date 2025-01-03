@@ -59,3 +59,4 @@ temp/shapes.o: src/shapes.cpp src/shapes.hpp src/utilities.hpp make.sh
 .PHONY: clean
 clean:
 	@rm -rf temp bin/FluidX3D
+	@rm bin/export/*.png

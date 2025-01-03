@@ -272,7 +272,7 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 
 
 
-/*void main_setup() { // particle test; required extensions in defines.hpp: VOLUME_FORCE, FORCE_FIELD, MOVING_BOUNDARIES, PARTICLES, INTERACTIVE_GRAPHICS
+void particle_test_setup() { // particle test; required extensions in defines.hpp: VOLUME_FORCE, FORCE_FIELD, MOVING_BOUNDARIES, PARTICLES, INTERACTIVE_GRAPHICS
 	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
 	const uint L = 128u;
 	const float Re = 1000.0f;
@@ -624,22 +624,12 @@ void aerocow_setup() { // aerodynamics of a cow; required extensions in defines.
 	lbm.graphics.set_camera_centered(-40.0f, 20.0f, 78.0f, 1.25f);
 	lbm.run(0u, lbm_T); // initialize simulation
 	while(lbm.get_t()<=lbm_T) { // main simulation loop
-		if(lbm.graphics.next_frame(lbm_T, 10.0f)) lbm.graphics.write_frame();
-		lbm.run(1u, lbm_T);
+	  if(lbm.graphics.next_frame(lbm_T, 10.0f)) lbm.graphics.write_frame();
+	  lbm.run(1u, lbm_T);
 	}
 #else // GRAPHICS && !INTERACTIVE_GRAPHICS
 	lbm.run();
 #endif // GRAPHICS && !INTERACTIVE_GRAPHICS
-}
-
-
-void main_setup() { // MAIN SETUP
-  // ###################
-  // OPTIONS:
-  // ###################
-  
-  //tiefighter_setup();
-  aerocow_setup();
 }
 
 
@@ -1325,22 +1315,92 @@ void main_setup() { // MAIN SETUP
 
 
 
-/*void main_setup() { // thermal convection; required extensions in defines.hpp: FP16S, VOLUME_FORCE, TEMPERATURE, INTERACTIVE_GRAPHICS
+void thermal_convection_setup() { // thermal convection; required extensions in defines.hpp: FP16S, VOLUME_FORCE, TEMPERATURE, INTERACTIVE_GRAPHICS
 	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
-	LBM lbm(32u, 196u, 60u, 1u, 1u, 1u, 0.02f, 0.0f, 0.0f, -0.0005f, 0.0f, 1.0f, 1.0f);
-	// ###################################################################################### define geometry ######################################################################################
-	const uint Nx=lbm.get_Nx(), Ny=lbm.get_Ny(), Nz=lbm.get_Nz(); parallel_for(lbm.get_N(), [&](ulong n) { uint x=0u, y=0u, z=0u; lbm.coordinates(n, x, y, z);
-		if(y==1) {
-			lbm.T[n] = 1.8f;
-			lbm.flags[n] = TYPE_T;
-		} else if(y==Ny-2) {
-			lbm.T[n] = 0.3f;
-			lbm.flags[n] = TYPE_T;
-		}
-		lbm.rho[n] = units.rho_hydrostatic(0.0005f, (float)z, 0.5f*(float)Nz); // initialize density with hydrostatic pressure
-		if(x==0u||x==Nx-1u||y==0u||y==Ny-1u||z==0u||z==Nz-1u) lbm.flags[n] = TYPE_S; // all non periodic
-	}); // ####################################################################### run simulation, export images and data ##########################################################################
-	lbm.graphics.visualization_modes = VIS_FLAG_LATTICE|VIS_STREAMLINES;
-	lbm.run();
-	//lbm.run(1000u); lbm.u.read_from_device(); println(lbm.u.x[lbm.index(Nx/2u, Ny/2u, Nz/2u)]); wait(); // test for binary identity
-} /**/
+
+  // new constructor (includes experiment with particles)
+  const float u = 0.01f;
+  const uint3 lbm_N = resolution(float3(1.0f, 1.0f, 1.0f), 4000u); // input: simulation box aspect ratio and VRAM occupation in MB, output: grid resolution
+  const float si_T = 1000.0f; // simulated time
+  const ulong lbm_T = units.t(si_T); // time in lbm units
+  const uint L = 128u;
+  const float Re = 2000.0f;
+  /*
+    LBM(
+    const uint3 N, const float nu,
+    const float fx=0.0f, const float fy=0.0f, const float fz=0.0f,
+    const float sigma=0.0f,
+    const float alpha=0.0f, const float beta=0.0f,
+    const uint particles_N=0u, const float particles_rho=1.0f
+    )
+  */
+  LBM lbm(
+	  lbm_N, units.nu_from_Re(Re, (float)(L-2u), u),
+	  -0.001f, 0.0123f, 0.0077f,
+	  -0.001f,
+	  0.001f, 1.01f,
+	  cb(L/4u), 0.77f
+	  );
+	
+  // ###################################################################################### define geometry ######################################################################################
+
+  // #### Initialize PARTICLES
+  uint seed = 42u;
+  for(ulong n=0ull; n<lbm.particles->length(); n++) {
+    lbm.particles->x[n] = random_symmetric(seed, 2.0f*lbm.size().x/4.0f);
+    lbm.particles->y[n] = random_symmetric(seed, 2.0f*lbm.size().y/4.0f);
+    lbm.particles->z[n] = random_symmetric(seed, 2.0f*lbm.size().z/4.0f);
+  }
+  // #### </END-OF-PARTICLES-EXPERIMENT>
+  
+  const uint Nx=lbm.get_Nx(), Ny=lbm.get_Ny(), Nz=lbm.get_Nz(); parallel_for(lbm.get_N(), [&](ulong n) { uint x=0u, y=0u, z=0u; lbm.coordinates(n, x, y, z);
+      if(y==1) {
+	lbm.T[n] = 1.8f;
+	lbm.flags[n] = TYPE_T;
+      } else if(y==Ny-2) {
+	lbm.T[n] = 0.3f;
+	lbm.flags[n] = TYPE_T;
+      } else {
+	lbm.flags[n] = TYPE_F; // set cell type (for moving particles); fluid, gas, solid, temp-bounds
+      }
+      lbm.rho[n] = units.rho_hydrostatic(0.0005f, 0.2f*(float)z, 0.5f*(float)Nz); // initialize density with hydrostatic pressure
+      if(x==0u||x==Nx-1u||y==0u||y==Ny-1u||z==0u||z==Nz-1u) lbm.flags[n] = TYPE_S; // all non periodic
+  }); // ####################################################################### run simulation, export images and data ##########################################################################
+  lbm.graphics.visualization_modes = VIS_FLAG_LATTICE|VIS_PARTICLES;
+#if defined(GRAPHICS) && !defined(INTERACTIVE_GRAPHICS)
+  lbm.graphics.set_camera_centered(-45.0f, 45.0f, 45.0f, 0.83f);
+  lbm.run(0u, lbm_T); // initialize simulation
+  uint ii_sim = 0;
+  while(lbm.get_t()<=lbm_T) { // main simulation loop
+    ii_sim = ii_sim + 1;
+    lbm.graphics.set_camera_centered(-45.0f, 45.0f, 45.0f, (float)(ii_sim)/(float)(si_T));
+    if(lbm.graphics.next_frame(lbm_T, 10.0f)) {
+      lbm.graphics.set_camera_centered(-45.0f, 45.0f, 45.0f, (float)(ii_sim)/(float)(si_T));
+      lbm.graphics.write_frame(get_exe_path()+"export/thermo/");
+    }
+    lbm.run(1u, lbm_T);
+  }
+  lbm.graphics.write_frame(get_exe_path()+"export/thermo/");
+#else // GRAPHICS && !INTERACTIVE_GRAPHICS
+  lbm.run();
+#endif
+}
+
+
+// -------------------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------------
+// #############################
+// MAIN SETUP:
+// #############################
+
+void main_setup() { // main setup function (calls selected option)
+  // OPTIONS:
+  // --------
+  
+  // tiefighter_setup();
+  // aerocow_setup();
+  thermal_convection_setup();
+  // particle_test_setup();
+  
+  // </end-options>
+}
