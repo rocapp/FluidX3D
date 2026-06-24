@@ -25,7 +25,7 @@
     sudo apt update && sudo apt upgrade -y
     sudo apt install -y g++ git make ocl-icd-libopencl1 ocl-icd-opencl-dev
     mkdir -p ~/amdgpu
-    wget -P ~/amdgpu https://repo.radeon.com/amdgpu-install/6.4.2.1/ubuntu/noble/amdgpu-install_6.4.60402-1_all.deb
+    wget -P ~/amdgpu https://repo.radeon.com/amdgpu-install/25.35.1/ubuntu/noble/amdgpu-install_7.2.1.70201-1_all.deb
     sudo apt install -y ~/amdgpu/amdgpu-install*.deb
     sudo amdgpu-install -y --usecase=graphics,rocm,opencl --opencl=rocr
     sudo usermod -a -G render,video $(whoami)
@@ -60,13 +60,13 @@
 
   - Option 1: Download and install the [oneAPI DPC++ Compiler](https://github.com/intel/llvm/releases?q=%22oneAPI+DPC%2B%2B+Compiler+dependencies%22) and [oneTBB](https://github.com/uxlfoundation/oneTBB/releases) with:
     ```bash
-    export OCLV="oclcpuexp-2025.20.6.0.04_224945_rel"
-    export TBBV="oneapi-tbb-2022.2.0"
+    export OCLV="oclcpuexp-2025.21.10.0.10_160000_rel"
+    export TBBV="oneapi-tbb-2023.0.0"
     sudo apt update && sudo apt upgrade -y
     sudo apt install -y g++ git make ocl-icd-libopencl1 ocl-icd-opencl-dev
     sudo mkdir -p ~/cpurt /opt/intel/${OCLV} /etc/OpenCL/vendors /etc/ld.so.conf.d
-    sudo wget -P ~/cpurt https://github.com/intel/llvm/releases/download/2025-WW27/${OCLV}.tar.gz
-    sudo wget -P ~/cpurt https://github.com/uxlfoundation/oneTBB/releases/download/v2022.2.0/${TBBV}-lin.tgz
+    sudo wget -P ~/cpurt https://github.com/intel/llvm/releases/download/2025-WW45/${OCLV}.tar.gz
+    sudo wget -P ~/cpurt https://github.com/uxlfoundation/oneTBB/releases/download/v2023.0.0/${TBBV}-lin.tgz
     sudo tar -zxvf ~/cpurt/${OCLV}.tar.gz -C /opt/intel/${OCLV}
     sudo tar -zxvf ~/cpurt/${TBBV}-lin.tgz -C /opt/intel
     echo /opt/intel/${OCLV}/x64/libintelocl.so | sudo tee /etc/OpenCL/vendors/intel_expcpu.icd
@@ -119,7 +119,7 @@
 
 ## 2. Compiling the Source Code
 - There is no "installation" of FluidX3D. Instead, you have to compile the source code yourself.
-- I have made this as easy as possible and this documentation will guide you through it. Nontheless, some basic programming experience with C++ would be good for the setup scripts.
+- I have made this as easy as possible and this documentation will guide you through it. Nonetheless, some basic programming experience with C++ would be good for the setup scripts.
 - First, compile the code as-is; this is the standard FP32 benchmark test case. By default, the fastest installed GPU will be selected automatically. Compile time is about 5 seconds.
 
 ### Windows
@@ -140,7 +140,8 @@
 - Compiling requires [`g++`](https://gcc.gnu.org/) with `C++17`, which is supported since version `8` (check with `g++ --version`). If you have [`make`](https://www.gnu.org/software/make/) installed (check with `make --version`), compiling will will be faster using multiple CPU cores; otherwise compiling falls back to using a single CPU core.
 - To select a specific GPU, enter `./make.sh 0` to compile+run, or `bin/FluidX3D 0` to run on device `0`. You can also select multiple GPUs with `bin/FluidX3D 0 1 3 6` if the setup is [configured as multi-GPU](#the-lbm-class).
 - Operating system (Linux/macOS/Android) and X11 support (required for [`INTERACTIVE_GRAPHICS`](src/defines.hpp)) are detected automatically. In case problems arise, you can still manually select [`target=...`](make.sh#L13) in [`make.sh`](make.sh#L13).
-- On macOS and Android, [`INTERACTIVE_GRAPHICS`](src/defines.hpp) mode is not supported, as no X11 is available. You can still use [`INTERACTIVE_GRAPHICS_ASCII`](src/defines.hpp) though, or [render video](#video-rendering) to the hard drive with regular [`GRAPHICS`](src/defines.hpp) mode.
+- On macOS, [`INTERACTIVE_GRAPHICS`](src/defines.hpp) mode requires [XQuartz](https://www.xquartz.org/) to be installed.
+- On Android, [`INTERACTIVE_GRAPHICS`](src/defines.hpp) mode is not supported, as no X11 is available. You can still use [`INTERACTIVE_GRAPHICS_ASCII`](src/defines.hpp) though, or [render video](#video-rendering) to the hard drive with regular [`GRAPHICS`](src/defines.hpp) mode.
 
 <br>
 
@@ -246,7 +247,7 @@
 - Available Boundary Conditions
   - Periodic Boundaries
     - All box sides where no solid (`TYPE_S`) or other boundary type are set will remain periodic boundaries.
-    - If strict mass conservation is required (for example flow through a linear pipe), use periodic boundaries (i.e. don't set any boundary type on the cells at these simulation box sides), and drive the flow with a volume force (equivalent to a pressure gradient). For this you need to enable (uncomment) the [`VOLUME_FORCE`](src/defines.hpp) extension, and in the [LBM constuctor](#the-lbm-class) set the force per volume (`fx`|`fy`|`fz`):
+    - If strict mass conservation is required (for example flow through a linear pipe), use periodic boundaries (i.e. don't set any boundary type on the cells at these simulation box sides), and drive the flow with a volume force (equivalent to a pressure gradient). For this you need to enable (uncomment) the [`VOLUME_FORCE`](src/defines.hpp) extension, and in the [LBM constructor](#the-lbm-class) set the force per volume (`fx`|`fy`|`fz`):
       ```c
       LBM lbm(Nx, Ny, Nz, nu, fx, fy, fz);
       ```
@@ -301,7 +302,7 @@
 ### Loading .stl Files
 - For more complex geometries, you can load `.stl` triangle meshes and voxelize them to the Cartesian simulation grid on the GPU(s).
 - Create a `FluidX3D/stl/` folder next to the `FluidX3D/src/` folder and download the geometry from websites like [Thingiverse](https://www.thingiverse.com/), or create your own.
-- Only binary `.stl` files are supported. Meshes must be watertight (no holes) and all triangles must be oriented such that their normals point to the outside. For conversion from other formats or for splitting composite geometries like helicopter hull and rotors, I recommend [Microsoft 3D Builder](https://apps.microsoft.com/store/detail/3d-builder/9WZDNCRFJ3T6) on Windows or [Blender](https://www.blender.org/) on Windows/Linux.
+- Only binary `.stl` files are supported. Meshes must be watertight (no holes) and all triangles must be oriented such that their normals point to the outside. For conversion from other formats or for splitting composite geometries like helicopter hull and rotors, I recommend [Microsoft 3D Builder](https://apps.microsoft.com/detail/9wzdncrfj3t6) (to download: paste `apps.microsoft.com/detail/9wzdncrfj3t6` in [here](https://store.rg-adguard.net/) and click on `Microsoft.3DBuilder_20.0.4.0_neutral_~_8wekyb3d8bbwe.appxbundle`) on Windows or [Blender](https://www.blender.org/) on Windows/Linux.
 - Load and voxelize simple `.stl` files directly with
   ```c
   lbm.voxelize_stl(get_exe_path()+"../stl/mesh.stl", center, rotation, size);
@@ -320,7 +321,6 @@
   mesh_2->translate(const float3& translation);
   lbm.voxelize_mesh_on_device(mesh_1); // voxelize meshes on GPU
   lbm.voxelize_mesh_on_device(mesh_2);
-  
   ```
   to load the meshes from the `.stl` files, manually scale/reposition all parts of the mesh the same time, and finally voxelize them on the GPU.
 - To aid with repositioning the mesh, there is `lbm.center()` for the center of the simulation box, as well as the min/max bounding-box coordinates of the mesh `mesh->pmin`/`mesh->pmax`, each a `float3` with (`x`|`y`|`z`) components.

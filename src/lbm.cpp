@@ -106,9 +106,9 @@ LBM_Domain::LBM_Domain(const Device_Info& device_info, const uint Nx, const uint
 	string opencl_c_code;
 #ifdef GRAPHICS
 	graphics = Graphics(this);
-	opencl_c_code = device_defines()+graphics.device_defines()+get_opencl_c_code();
+	opencl_c_code = device_defines(device_info)+graphics.device_defines(device_info)+get_opencl_c_code();
 #else // GRAPHICS
-	opencl_c_code = device_defines()+get_opencl_c_code();
+	opencl_c_code = device_defines(device_info)+get_opencl_c_code();
 #endif // GRAPHICS
 	this->device = Device(device_info, opencl_c_code);
 	print_info("Allocating memory. This may take a few seconds.");
@@ -252,8 +252,8 @@ void LBM_Domain::enqueue_integrate_particles(const uint time_step_multiplicator)
 }
 #endif // PARTICLES
 
-void LBM_Domain::increment_time_step(const uint steps) {
-	t += (ulong)steps; // increment time step
+void LBM_Domain::increment_time_step(const ulong steps) {
+	t += steps; // increment time step
 #ifdef UPDATE_FIELDS
 	t_last_update_fields = t;
 #endif // UPDATE_FIELDS
@@ -331,7 +331,7 @@ void LBM_Domain::enqueue_unvoxelize_mesh_on_device(const Mesh* mesh, const uchar
 	kernel_unvoxelize_mesh.run();
 }
 
-string LBM_Domain::device_defines() const { return
+string LBM_Domain::device_defines(const Device_Info& device_info) const { return
 	"\n	#define def_Nx "+to_string(Nx)+"u"
 	"\n	#define def_Ny "+to_string(Ny)+"u"
 	"\n	#define def_Nz "+to_string(Nz)+"u"
@@ -405,22 +405,23 @@ string LBM_Domain::device_defines() const { return
 	"\n	#define TYPE_IG 0x30" // 0b00110000 // change from interface to gas
 	"\n	#define TYPE_GI 0x38" // 0b00111000 // change from gas to interface
 	"\n	#define TYPE_SU 0x38" // 0b00111000 // any flag bit used for SURFACE
+	"\n	#define TYPE_XY 0xC0" // 0b11000000 // any flag bit used for X or Y markers
 
 #if defined(FP16S)
 	"\n	#define fpxx half" // switchable data type (scaled IEEE-754 16-bit floating-point format: 1-5-10, exp-30, +-1.99902344, +-1.86446416E-9, +-1.81898936E-12, 3.311 digits)
 	"\n	#define fpxx_copy ushort" // switchable data type for direct copying (scaled IEEE-754 16-bit floating-point format: 1-5-10, exp-30, +-1.99902344, +-1.86446416E-9, +-1.81898936E-12, 3.311 digits)
-	"\n	#define load(p,o) vload_half(o,p)*3.0517578E-5f" // special function for loading half
+	"\n	#define load(p,o) (vload_half(o,p)*3.0517578E-5f)" // special function for loading half
 	"\n	#define store(p,o,x) vstore_half_rte((x)*32768.0f,o,p)" // special function for storing half
 #elif defined(FP16C)
 	"\n	#define fpxx ushort" // switchable data type (custom 16-bit floating-point format: 1-4-11, exp-15, +-1.99951168, +-6.10351562E-5, +-2.98023224E-8, 3.612 digits), 12.5% slower than IEEE-754 16-bit
 	"\n	#define fpxx_copy ushort" // switchable data type for direct copying (custom 16-bit floating-point format: 1-4-11, exp-15, +-1.99951168, +-6.10351562E-5, +-2.98023224E-8, 3.612 digits), 12.5% slower than IEEE-754 16-bit
-	"\n	#define load(p,o) half_to_float_custom(p[o])" // special function for loading half
-	"\n	#define store(p,o,x) p[o]=float_to_half_custom(x)" // special function for storing half
+	"\n	#define load(p,o) half_to_float_custom((p)[o])" // special function for loading half
+	"\n	#define store(p,o,x) (p)[o]=float_to_half_custom(x)" // special function for storing half
 #else // FP32
 	"\n	#define fpxx float" // switchable data type (regular 32-bit float)
 	"\n	#define fpxx_copy float" // switchable data type for direct copying (regular 32-bit float)
-	"\n	#define load(p,o) p[o]" // regular float read
-	"\n	#define store(p,o,x) p[o]=x" // regular float write
+	"\n	#define load(p,o) (p)[o]" // regular float read
+	"\n	#define store(p,o,x) (p)[o]=(x)" // regular float write
 #endif // FP32
 
 #ifdef UPDATE_FIELDS
@@ -472,9 +473,19 @@ void LBM_Domain::Graphics::allocate(Device& device) {
 	zbuffer = Memory<int>(device, camera.width*camera.height, 1u, lbm->get_D()>1u); // if there are multiple domains, allocate zbuffer also on host side
 	camera_parameters = Memory<float>(device, 15u);
 	kernel_clear = Kernel(device, bitmap.length(), "graphics_clear", bitmap, zbuffer);
-
 	kernel_graphics_flags = Kernel(device, lbm->get_N(), "graphics_flags", camera_parameters, bitmap, zbuffer, lbm->flags);
-	kernel_graphics_flags_mc = Kernel(device, lbm->get_N(), "graphics_flags_mc", camera_parameters, bitmap, zbuffer, lbm->flags);
+	{
+#ifndef FORCE_FIELD
+		const uint cache_required = (cb(GRAPHICS_LSF+1u)* 1u+1023u)/1024u; // in KB
+#else // FORCE_FIELD
+		const uint cache_required = (cb(GRAPHICS_LSF+1u)*13u+1023u)/1024u; // in KB
+#endif // FORCE_FIELD
+		const bool enable_ls = GRAPHICS_LSF>0u&&device.info.max_workgroup_size>=cb(GRAPHICS_LSF)&&device.info.local_cache>=cache_required;
+		if(GRAPHICS_LSF>0u&&!enable_ls) print_warning(device.info.name+" does not support local memory optimization with GRAPHICS_LSF = "+to_string(GRAPHICS_LSF)+" (max supported workgroup size: "+to_string(device.info.max_workgroup_size)+" (required: "+to_string(cb(GRAPHICS_LSF))+"), cache: "+to_string(device.info.local_cache)+"KB (required: "+to_string(cache_required)+"KB)). Disabling local memory optimization.");
+		const ulong N = enable_ls ? (ulong)((lbm->get_Nx()+GRAPHICS_LSF-2u)/GRAPHICS_LSF)*(ulong)((lbm->get_Ny()+GRAPHICS_LSF-2u)/GRAPHICS_LSF)*(ulong)((lbm->get_Nz()+GRAPHICS_LSF-2u)/GRAPHICS_LSF)*(ulong)cb(GRAPHICS_LSF) : (ulong)(lbm->get_Nx()-1u)*(ulong)(lbm->get_Ny()-1u)*(ulong)(lbm->get_Nz()-1u);
+		const uint workgroup_size = enable_ls ? cb(GRAPHICS_LSF) : WORKGROUP_SIZE;
+		kernel_graphics_flags_mc = Kernel(device, N, workgroup_size, "graphics_flags_mc", camera_parameters, bitmap, zbuffer, lbm->flags);
+	}
 	kernel_graphics_field = Kernel(device, lbm->get_D()==1u ? camera.width*camera.height : lbm->get_N(), lbm->get_D()==1u ? "graphics_field_rt" : "graphics_field", camera_parameters, bitmap, zbuffer, 0, lbm->rho, lbm->u, lbm->flags); // raytraced field visualization only works for single-GPU
 	kernel_graphics_field_slice = Kernel(device, lbm->get_N(), "graphics_field_slice", camera_parameters, bitmap, zbuffer, 0, 0, 0, 0, 0, lbm->rho, lbm->u, lbm->flags);
 #ifndef D2Q9
@@ -482,7 +493,14 @@ void LBM_Domain::Graphics::allocate(Device& device) {
 #else // D2Q9
 	kernel_graphics_streamline = Kernel(device, (lbm->get_Nx()/GRAPHICS_STREAMLINE_SPARSE)*(lbm->get_Ny()/GRAPHICS_STREAMLINE_SPARSE), "graphics_streamline", camera_parameters, bitmap, zbuffer, 0, 0, 0, 0, 0, lbm->rho, lbm->u, lbm->flags); // 2D
 #endif // D2Q9
-	kernel_graphics_q = Kernel(device, lbm->get_N(), "graphics_q", camera_parameters, bitmap, zbuffer, 0, lbm->rho, lbm->u);
+	{
+		const uint cache_required = (cb(GRAPHICS_LSQ+3u)*12u+1023u)/1024u; // in KB
+		const bool enable_ls = GRAPHICS_LSQ>0u&&device.info.max_workgroup_size>=cb(GRAPHICS_LSQ)&&device.info.local_cache>=cache_required;
+		if(GRAPHICS_LSQ>0u&&!enable_ls) print_warning(device.info.name+" does not support local memory optimization with GRAPHICS_LSQ = "+to_string(GRAPHICS_LSQ)+" (max supported workgroup size: "+to_string(device.info.max_workgroup_size)+" (required: "+to_string(cb(GRAPHICS_LSQ))+"), cache: "+to_string(device.info.local_cache)+"KB (required: "+to_string(cache_required)+"KB)). Disabling local memory optimization.");
+		const ulong N = enable_ls ? (ulong)((lbm->get_Nx()+GRAPHICS_LSQ-2u)/GRAPHICS_LSQ)*(ulong)((lbm->get_Ny()+GRAPHICS_LSQ-2u)/GRAPHICS_LSQ)*(ulong)((lbm->get_Nz()+GRAPHICS_LSQ-2u)/GRAPHICS_LSQ)*(ulong)cb(GRAPHICS_LSQ) : (ulong)(lbm->get_Nx()-1u)*(ulong)(lbm->get_Ny()-1u)*(ulong)(lbm->get_Nz()-1u);
+		const uint workgroup_size = enable_ls ? cb(GRAPHICS_LSQ) : WORKGROUP_SIZE;
+		kernel_graphics_q = Kernel(device, N, workgroup_size, "graphics_q", camera_parameters, bitmap, zbuffer, 0, lbm->rho, lbm->u);
+	}
 
 #ifdef FORCE_FIELD
 	kernel_graphics_flags.add_parameters(lbm->F);
@@ -491,7 +509,14 @@ void LBM_Domain::Graphics::allocate(Device& device) {
 
 #ifdef SURFACE
 	skybox = Memory<int>(device, skybox_image->width()*skybox_image->height(), 1u, skybox_image->data());
-	kernel_graphics_rasterize_phi = Kernel(device, lbm->get_N(), "graphics_rasterize_phi", camera_parameters, bitmap, zbuffer, lbm->phi);
+	{
+		const uint cache_required = (cb(GRAPHICS_LSP+1u)*4u+1023u)/1024u; // in KB
+		const bool enable_ls = GRAPHICS_LSP>0u&&device.info.max_workgroup_size>=cb(GRAPHICS_LSP)&&device.info.local_cache>=cache_required;
+		if(GRAPHICS_LSP>0u&&!enable_ls) print_warning(device.info.name+" does not support local memory optimization with GRAPHICS_LSP = "+to_string(GRAPHICS_LSP)+" (max supported workgroup size: "+to_string(device.info.max_workgroup_size)+" (required: "+to_string(cb(GRAPHICS_LSP))+"), cache: "+to_string(device.info.local_cache)+"KB (required: "+to_string(cache_required)+"KB)). Disabling local memory optimization.");
+		const ulong N = enable_ls ? (ulong)((lbm->get_Nx()+GRAPHICS_LSP-2u)/GRAPHICS_LSP)*(ulong)((lbm->get_Ny()+GRAPHICS_LSP-2u)/GRAPHICS_LSP)*(ulong)((lbm->get_Nz()+GRAPHICS_LSP-2u)/GRAPHICS_LSP)*(ulong)cb(GRAPHICS_LSP) : (ulong)(lbm->get_Nx()-1u)*(ulong)(lbm->get_Ny()-1u)*(ulong)(lbm->get_Nz()-1u);
+		const uint workgroup_size = enable_ls ? cb(GRAPHICS_LSP) : WORKGROUP_SIZE;
+		kernel_graphics_rasterize_phi = Kernel(device, N, workgroup_size, "graphics_rasterize_phi", camera_parameters, bitmap, zbuffer, lbm->phi);
+	}
 	kernel_graphics_raytrace_phi = Kernel(device, bitmap.length(), "graphics_raytrace_phi", camera_parameters, bitmap, skybox, lbm->phi, lbm->flags);
 	kernel_graphics_q.add_parameters(lbm->flags);
 #endif // SURFACE
@@ -576,7 +601,7 @@ int* LBM_Domain::Graphics::get_zbuffer() { // returns pointer to zbuffer
 	return zbuffer.data();
 }
 
-string LBM_Domain::Graphics::device_defines() const { return
+string LBM_Domain::Graphics::device_defines(const Device_Info& device_info) const { return
 	"\n	#define GRAPHICS"
 	"\n	#define def_background_color " +to_string(GRAPHICS_BACKGROUND_COLOR)+""
 	"\n	#define def_screen_width "     +to_string(camera.width)+"u"
@@ -614,6 +639,14 @@ string LBM_Domain::Graphics::device_defines() const { return
 	"\n	#define def_skybox_width " +to_string(skybox_image->width() )+"u"
 	"\n	#define def_skybox_height "+to_string(skybox_image->height())+"u"
 #endif // SURFACE
+
+#ifndef FORCE_FIELD
+	"\n	#define LSF "+to_string((GRAPHICS_LSF>0u&&device_info.max_workgroup_size>=cb(GRAPHICS_LSF)&&device_info.local_cache>=(cb(GRAPHICS_LSF+1u)* 1u+1023u)/1024u) ? GRAPHICS_LSF : 0u)+"u" // local box size for graphics_flags_mc() kernel (default: 4)
+#else // FORCE_FIELD
+	"\n	#define LSF "+to_string((GRAPHICS_LSF>0u&&device_info.max_workgroup_size>=cb(GRAPHICS_LSF)&&device_info.local_cache>=(cb(GRAPHICS_LSF+1u)*13u+1023u)/1024u) ? GRAPHICS_LSF : 0u)+"u" // local box size for graphics_flags_mc() kernel (default: 4)
+#endif // FORCE_FIELD
+	"\n	#define LSQ "+to_string((GRAPHICS_LSQ>0u&&device_info.max_workgroup_size>=cb(GRAPHICS_LSQ)&&device_info.local_cache>=(cb(GRAPHICS_LSQ+3u)*12u+1023u)/1024u) ? GRAPHICS_LSQ : 0u)+"u" // local box size for graphics_q() kernel (default: 8)
+	"\n	#define LSP "+to_string((GRAPHICS_LSP>0u&&device_info.max_workgroup_size>=cb(GRAPHICS_LSP)&&device_info.local_cache>=(cb(GRAPHICS_LSP+1u)* 4u+1023u)/1024u) ? GRAPHICS_LSP : 0u)+"u" // local box size for graphics_rasterize_phi() kernel (default: 4)
 ;}
 #endif // GRAPHICS
 
@@ -1161,8 +1194,8 @@ int* LBM::Graphics::draw_frame() {
 	int* bitmap = lbm->lbm_domain[0]->graphics.get_bitmap();
 	int* zbuffer = lbm->lbm_domain[0]->graphics.get_zbuffer();
 	for(uint d=1u; d<lbm->get_D()&&new_frame; d++) {
-		const int* bitmap_d = lbm->lbm_domain[d]->graphics.get_bitmap(); // each domain renders its own frame
-		const int* zbuffer_d = lbm->lbm_domain[d]->graphics.get_zbuffer();
+		const int* const bitmap_d = lbm->lbm_domain[d]->graphics.get_bitmap(); // each domain renders its own frame
+		const int* const zbuffer_d = lbm->lbm_domain[d]->graphics.get_zbuffer();
 		for(uint i=0u; i<camera.width*camera.height; i++) {
 #ifndef GRAPHICS_TRANSPARENCY
 			const int zdi = zbuffer_d[i];
@@ -1281,25 +1314,25 @@ void LBM_Domain::allocate_transfer(Device& device) { // allocate all memory for 
 	transfer_buffer_p = Memory<char>(device, Amax, max(transfers*(uint)sizeof(fpxx), 17u), true, true, 0, false); // only allocate one set of transfer buffers in plus/minus directions, for all x/y/z transfers
 	transfer_buffer_m = Memory<char>(device, Amax, max(transfers*(uint)sizeof(fpxx), 17u), true, true, 0, false); // these transfer buffers must not be zero-copy!
 
-	kernel_transfer[enum_transfer_field::fi              ][0] = Kernel(device, 0u, "transfer_extract_fi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, fi);
-	kernel_transfer[enum_transfer_field::fi              ][1] = Kernel(device, 0u, "transfer__insert_fi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, fi);
-	kernel_transfer[enum_transfer_field::rho_u_flags     ][0] = Kernel(device, 0u, "transfer_extract_rho_u_flags"     , 0u, t, transfer_buffer_p, transfer_buffer_m, rho, u, flags);
-	kernel_transfer[enum_transfer_field::rho_u_flags     ][1] = Kernel(device, 0u, "transfer__insert_rho_u_flags"     , 0u, t, transfer_buffer_p, transfer_buffer_m, rho, u, flags);
-	kernel_transfer[enum_transfer_field::flags           ][0] = Kernel(device, 0u, "transfer_extract_flags"           , 0u, t, transfer_buffer_p, transfer_buffer_m, flags);
-	kernel_transfer[enum_transfer_field::flags           ][1] = Kernel(device, 0u, "transfer__insert_flags"           , 0u, t, transfer_buffer_p, transfer_buffer_m, flags);
+	kernel_transfer[enum_transfer_field::fi              ][0] = Kernel(device, 0ull, "transfer_extract_fi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, fi);
+	kernel_transfer[enum_transfer_field::fi              ][1] = Kernel(device, 0ull, "transfer__insert_fi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, fi);
+	kernel_transfer[enum_transfer_field::rho_u_flags     ][0] = Kernel(device, 0ull, "transfer_extract_rho_u_flags"     , 0u, t, transfer_buffer_p, transfer_buffer_m, rho, u, flags);
+	kernel_transfer[enum_transfer_field::rho_u_flags     ][1] = Kernel(device, 0ull, "transfer__insert_rho_u_flags"     , 0u, t, transfer_buffer_p, transfer_buffer_m, rho, u, flags);
+	kernel_transfer[enum_transfer_field::flags           ][0] = Kernel(device, 0ull, "transfer_extract_flags"           , 0u, t, transfer_buffer_p, transfer_buffer_m, flags);
+	kernel_transfer[enum_transfer_field::flags           ][1] = Kernel(device, 0ull, "transfer__insert_flags"           , 0u, t, transfer_buffer_p, transfer_buffer_m, flags);
 #ifdef FORCE_FIELD
-	kernel_transfer[enum_transfer_field::F               ][0] = Kernel(device, 0u, "transfer_extract_F"               , 0u, t, transfer_buffer_p, transfer_buffer_m, F);
-	kernel_transfer[enum_transfer_field::F               ][1] = Kernel(device, 0u, "transfer__insert_F"               , 0u, t, transfer_buffer_p, transfer_buffer_m, F);
+	kernel_transfer[enum_transfer_field::F               ][0] = Kernel(device, 0ull, "transfer_extract_F"               , 0u, t, transfer_buffer_p, transfer_buffer_m, F);
+	kernel_transfer[enum_transfer_field::F               ][1] = Kernel(device, 0ull, "transfer__insert_F"               , 0u, t, transfer_buffer_p, transfer_buffer_m, F);
 #endif // FORCE_FIELD
 #ifdef SURFACE
-	kernel_transfer[enum_transfer_field::phi_massex_flags][0] = Kernel(device, 0u, "transfer_extract_phi_massex_flags", 0u, t, transfer_buffer_p, transfer_buffer_m, phi, massex, flags);
-	kernel_transfer[enum_transfer_field::phi_massex_flags][1] = Kernel(device, 0u, "transfer__insert_phi_massex_flags", 0u, t, transfer_buffer_p, transfer_buffer_m, phi, massex, flags);
+	kernel_transfer[enum_transfer_field::phi_massex_flags][0] = Kernel(device, 0ull, "transfer_extract_phi_massex_flags", 0u, t, transfer_buffer_p, transfer_buffer_m, phi, massex, flags);
+	kernel_transfer[enum_transfer_field::phi_massex_flags][1] = Kernel(device, 0ull, "transfer__insert_phi_massex_flags", 0u, t, transfer_buffer_p, transfer_buffer_m, phi, massex, flags);
 #endif // SURFACE
 #ifdef TEMPERATURE
-	kernel_transfer[enum_transfer_field::gi              ][0] = Kernel(device, 0u, "transfer_extract_gi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, gi);
-	kernel_transfer[enum_transfer_field::gi              ][1] = Kernel(device, 0u, "transfer__insert_gi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, gi);
-	kernel_transfer[enum_transfer_field::T               ][0] = Kernel(device, 0u, "transfer_extract_T"               , 0u, t, transfer_buffer_p, transfer_buffer_m, T);
-	kernel_transfer[enum_transfer_field::T               ][1] = Kernel(device, 0u, "transfer__insert_T"               , 0u, t, transfer_buffer_p, transfer_buffer_m, T);
+	kernel_transfer[enum_transfer_field::gi              ][0] = Kernel(device, 0ull, "transfer_extract_gi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, gi);
+	kernel_transfer[enum_transfer_field::gi              ][1] = Kernel(device, 0ull, "transfer__insert_gi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, gi);
+	kernel_transfer[enum_transfer_field::T               ][0] = Kernel(device, 0ull, "transfer_extract_T"               , 0u, t, transfer_buffer_p, transfer_buffer_m, T);
+	kernel_transfer[enum_transfer_field::T               ][1] = Kernel(device, 0ull, "transfer__insert_T"               , 0u, t, transfer_buffer_p, transfer_buffer_m, T);
 #endif // TEMPERATURE
 }
 

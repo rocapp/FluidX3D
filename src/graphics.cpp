@@ -687,20 +687,43 @@ int main(int argc, char* argv[]) {
 	x11_display = XOpenDisplay(0);
 	if(!x11_display) print_error("No X11 display available.");
 
+	uint width=0u, height=0u, fps_limit=0u;
+	int window_offset_x=0, window_offset_y=0;
+
 	Window x11_root_window = DefaultRootWindow(x11_display);
 	XRRScreenResources* x11_screen_resources = XRRGetScreenResources(x11_display, x11_root_window);
-	XRROutputInfo* x11_output_info = XRRGetOutputInfo(x11_display, x11_screen_resources, XRRGetOutputPrimary(x11_display, x11_root_window));
-	XRRCrtcInfo* x11_crtc_info = XRRGetCrtcInfo(x11_display, x11_screen_resources, x11_output_info->crtc);
-	XRRScreenConfiguration* x11_screen_configuration = XRRGetScreenInfo(x11_display, x11_root_window);
-	const uint width  = (uint)x11_crtc_info->width; // width and height of primary monitor
-	const uint height = (uint)x11_crtc_info->height;
-	const int window_offset_x = (int)x11_crtc_info->x; // offset of primary monitor in multi-monitor coordinates
-	const int window_offset_y = (int)x11_crtc_info->y;
-	const uint fps_limit = (uint)XRRConfigCurrentRate(x11_screen_configuration);
-	XRRFreeScreenConfigInfo(x11_screen_configuration);
-	XRRFreeCrtcInfo(x11_crtc_info);
-	XRRFreeOutputInfo(x11_output_info);
+	if(x11_screen_resources!=nullptr) {
+		RROutput x11_output_primary = XRRGetOutputPrimary(x11_display, x11_root_window);
+		if(x11_output_primary!=None) {
+			XRROutputInfo* x11_output_info = XRRGetOutputInfo(x11_display, x11_screen_resources, x11_output_primary);
+			if(x11_output_info!=nullptr) {
+				XRRCrtcInfo* x11_crtc_info = XRRGetCrtcInfo(x11_display, x11_screen_resources, x11_output_info->crtc);
+				if(x11_crtc_info!=nullptr) {
+					width  = (uint)x11_crtc_info->width; // width and height of primary monitor
+					height = (uint)x11_crtc_info->height;
+					window_offset_x = (int)x11_crtc_info->x; // offset of primary monitor in multi-monitor coordinates
+					window_offset_y = (int)x11_crtc_info->y;
+				}
+				XRRFreeCrtcInfo(x11_crtc_info);
+			}
+			XRRFreeOutputInfo(x11_output_info);
+		}
+	}
 	XRRFreeScreenResources(x11_screen_resources);
+	XRRScreenConfiguration* x11_screen_configuration = XRRGetScreenInfo(x11_display, x11_root_window);
+	if(x11_screen_configuration!=nullptr) {
+		fps_limit = (uint)XRRConfigCurrentRate(x11_screen_configuration);
+	}
+	XRRFreeScreenConfigInfo(x11_screen_configuration);
+	if(width==0u||height==0u) { // fallback if Xrandr fails
+		width  = (uint)DisplayWidth (x11_display, 0);
+		height = (uint)DisplayHeight(x11_display, 0);
+		window_offset_x = 0;
+		window_offset_y = 0;
+	}
+	if(fps_limit==0u) {
+		fps_limit = 60u; // fallback to 60fps default
+	}
 
 	camera = Camera(width, height, fps_limit);
 
